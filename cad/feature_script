@@ -1,0 +1,241 @@
+// Feature script for rolling element wave reduction. Need to check repeat first point to enclose sketch profile.
+FeatureScript 2695;
+import(path : "onshape/std/common.fs", version : "2695.0");
+import(path : "onshape/std/geometry.fs", version : "2695.0");
+
+annotation { "Feature Type Name" : "Rolling Element Gear", "Editing Logic Function" : "editProperties" }
+export const rollingElementGear = defineFeature(function(context is Context, id is Id, definition is map)
+    precondition
+    {
+        annotation { "Name" : "Placement plane (planar face)",
+            "Filter" : EntityType.FACE, "MaxNumberOfPicks" : 1 }
+        definition.plane is Query;
+
+        annotation { "Name" : "Sketch vertex or mate connector (optional)",
+            "Filter" : (EntityType.VERTEX && SketchObject.YES) || BodyType.MATE_CONNECTOR,
+            "MaxNumberOfPicks" : 1 }
+        definition.center is Query;
+
+        annotation { "Name" : "Crank radius (a)" }
+        isLength(definition.a, A_BOUNDS);
+
+        annotation { "Name" : "Roller radius (b)" }
+        isLength(definition.b, B_BOUNDS);
+
+        annotation { "Name" : "Eccentricity (e)" }
+        isLength(definition.e, E_BOUNDS);
+
+        annotation { "Name" : "Teeth count (z)" }
+        isInteger(definition.z, TEETH_BOUNDS);
+
+        annotation { "Name" : "Resolution (points per tooth)" }
+        isInteger(definition.resolutionPerTooth, RES_PER_TOOTH_BOUNDS);
+
+        annotation { "Name" : "Debug mode (extra visuals & logs)" }
+        definition.debug is boolean;
+
+        annotation { "Name" : "Draw center path Ec (no offset)" }
+        definition.drawCenter is boolean;
+
+        annotation { "Name" : "Draw sparse polyline through samples" }
+        definition.drawPolyline is boolean;
+
+        annotation { "Name" : "Repeat first point at end (force closure)" }
+        definition.forceClosure is boolean;
+    }
+    {
+        // 1) Resolve sketch plane (face → mate connector → sketch vertex → world XY)
+        var sketchPlane = plane(WORLD_ORIGIN, -Y_DIRECTION, X_DIRECTION);
+        if (!isQueryEmpty(context, definition.plane))
+            sketchPlane = evPlane(context, { "face" : definition.plane });
+        else if (!isQueryEmpty(context, definition.center))
+        {
+            try silent
+            {
+                sketchPlane = plane(evMateConnector(context, { "mateConnector" : definition.center }));
+            }
+            catch
+            {
+                try silent
+                {
+                    sketchPlane = evOwnerSketchPlane(context, { "entity" : definition.center });
+                    sketchPlane.origin = evVertexPoint(context, { "vertex" : definition.center });
+                }
+                catch
+                {
+                    try silent
+                    {
+                        var vpt = evVertexPoint(context, { "vertex" : definition.center });
+                        sketchPlane.origin = vpt;
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        // 2) Parameters
+        var a = definition.a;
+        var b = definition.b;
+        var e = definition.e;
+        var z = definition.z;
+        var resPerTooth = definition.resolutionPerTooth;
+
+        var debugOn = definition.debug;
+        var drawCenter = definition.drawCenter;
+        var drawPolyline = definition.drawPolyline;
+        var forceClosure = definition.forceClosure;
+
+        // Cap total points for reliable rendering
+        var MAX_TOTAL_POINTS = 300;
+        var totalPointsRaw = max(10, resPerTooth * z);
+        var totalPoints = min(MAX_TOTAL_POINTS, totalPointsRaw);
+
+        if (e >= b / 2)
+            reportFeatureInfo(context, id, "Hint: choose e < b/2 (paper Eq. 1).");
+
+        println("REG plane origin: " ~ toString(sketchPlane.origin));
+        println("REG inputs — a:" ~ a ~ " b:" ~ b ~ " e:" ~ e ~ " z:" ~ z ~ " rpt:" ~ resPerTooth ~ " totalRaw:" ~ totalPointsRaw ~ " totalCap:" ~ totalPoints);
+
+        // 3) Sample points
+        var pointsOffset = [];   // Er
+        var pointsCenter = [];   // Ec
+
+        const EPS2 = 1e-18 * meter * meter;
+        const EPS  = 1e-12 * meter;
+
+        for (var i = 0; i < totalPoints; i += 1)
+        {
+            var fraction = i / totalPoints;
+            var beta = fraction * 2 * PI * z * radian;
+
+            var sine = sin(beta);
+            var cosine = cos(beta);
+            var termSq = (a + b) * (a + b) - (e * e) * (sine * sine);
+            var termSqrt = sqrt(max(termSq, EPS2));
+
+            var c = e * cosine + termSqrt;
+
+            var angleZ = beta / z;
+            var cosZ = cos(angleZ);
+            var sinZ = sin(angleZ);
+
+            var factorTangential = e * sine * (1 + (e * cosine) / termSqrt);
+
+            var nx = (c / z) * cosZ - factorTangential * sinZ;
+            var ny = (c / z) * sinZ + factorTangential * cosZ;
+
+            var normN = sqrt(nx * nx + ny * ny);
+            if (normN <= EPS) continue;
+
+            var Nx = nx / normN;
+            var Ny = ny / normN;
+
+            var ecX = c * cosZ;
+            var ecY = c * sinZ;
+
+            var erX = ecX + b * Nx;
+            var erY = ecY + b * Ny;
+
+            pointsCenter = append(pointsCenter, vector(ecX / meter, ecY / meter) * meter);
+            pointsOffset = append(pointsOffset, vector(erX / meter, erY / meter) * meter);
+        }
+
+        // Optional: force an explicit closure by repeating the first point
+        if (forceClosure && size(pointsOffset) >= 3)
+            pointsOffset = append(pointsOffset, pointsOffset[0]);
+        if (forceClosure && drawCenter && size(pointsCenter) >= 3)
+            pointsCenter = append(pointsCenter, pointsCenter[0]);
+
+        // 4) Sketch + visuals
+        const sketchId = id + "gearSketch";
+        const gearSketch = newSketchOnPlane(context, sketchId, { "sketchPlane" : sketchPlane });
+
+        // Guide circle for scale
+        skCircle(gearSketch, "guideCircle", {
+            "center" : vector(0, 0) * meter,
+            "radius" : (a + b),
+            "construction" : true
+        });
+
+        if (drawCenter && size(pointsCenter) >= 3)
+        {
+            skFitSpline(gearSketch, "centerSpline", {
+                "points" : pointsCenter,
+                "isClosed" : true
+            });
+        }
+
+        reportFeatureInfo(context, id, "Offset samples (Er): " ~ size(pointsOffset));
+        println("REG offset samples: " ~ size(pointsOffset));
+        if (size(pointsOffset) < 3)
+        {
+            reportFeatureError(context, id,
+                "Offset profile not generated: too few valid points (" ~ size(pointsOffset) ~ "). Reduce e or z, or increase a+b.");
+            return;
+        }
+
+        skFitSpline(gearSketch, "gearSpline", {
+            "points" : pointsOffset,
+            "isClosed" : true
+        });
+
+        if (drawPolyline)
+        {
+            var polyPts = [];
+            var jump = max(1, floor(size(pointsOffset) / 200));
+            for (var j = 0; j < size(pointsOffset); j += jump)
+                polyPts = append(polyPts, pointsOffset[j]);
+            if (size(polyPts) >= 2)
+                skPolyline(gearSketch, "gearPolyline", { "points" : polyPts, "construction" : true });
+        }
+
+        // Sparse debug points (always useful early on)
+        if (debugOn)
+        {
+            var dbgCount = 0;
+            var strideEmit = max(1, floor(size(pointsOffset) / 40));
+            for (var k = 0; k < size(pointsOffset); k += strideEmit)
+            {
+                skPoint(gearSketch, "dbgP" ~ k, { "position" : pointsOffset[k] });
+                dbgCount += 1;
+            }
+            reportFeatureInfo(context, id, "Debug points: " ~ dbgCount);
+        }
+
+        skSolve(gearSketch);
+        reportFeatureInfo(context, id, "Sketch: '" ~ sketchId ~ "'. Toggle Sketch visibility if needed.");
+    });
+
+export function editProperties(context is Context, id is Id, oldDefinition is map, definition is map, isCreating is boolean, specifiedParameters is map, hiddenBodies is Query) returns map
+{
+    return definition;
+}
+
+// Bounds
+const A_BOUNDS = {
+    (meter)      : [1e-6, 0.02, 10],
+    (millimeter) : 20.0,
+    (inch)       : 0.8
+} as LengthBoundSpec;
+
+const B_BOUNDS = {
+    (meter)      : [1e-6, 0.006, 5],
+    (millimeter) : 6.0,
+    (inch)       : 0.24
+} as LengthBoundSpec;
+
+const E_BOUNDS = {
+    (meter)      : [1e-6, 0.002, 5],
+    (millimeter) : 2.0,
+    (inch)       : 0.08
+} as LengthBoundSpec;
+
+const TEETH_BOUNDS =
+{
+    (unitless) : [1, 10, 200]
+} as IntegerBoundSpec;
+
+const RES_PER_TOOTH_BOUNDS =
+{
+    (unitless) : [5, 10, 100]   // dialed-down defaults for robust display
+} as IntegerBoundSpec;

@@ -69,7 +69,7 @@ def calculate_gear_profile(a, b, e, z, resolution=2000):
 # Eq 13: z = |i - 1|. If i = -10, z = |-11| = 11.
 # Let's try a standard configuration.
 a_val = 25.0   # Crank radius
-b_val = 6.0    # Rolling element radius
+b_val = 3.0    # Rolling element radius
 e_val = 1.2    # Eccentricity (must be < b/2)
 z_val = 10     # Teeth count
 
