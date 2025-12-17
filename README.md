@@ -15,6 +15,14 @@ All profile equations came from [this paper [1]](#refences).
 - Reduce $b$: Reduce the radius of the rolling elements (this reduces the offset distance $q$).    
 
 
-## Refences
+## Usage
+
+A feature script for generating wave profile in `OnShape`, and equations for equation-driven curves in `SolidWorks` are provided.
+
+> [!Note]    
+> SW curves only generates the profile for center of roller paths - you will need to offset the trajectory for the wave profile.
+
+
+## References
 
 [1] S. Fritsch, S. Landler, M. Otto, B. Vogel-Heuser, M. Zimmermann, and K. Stahl, “Discussion of a variant of eccentric drives utilizing rolling elements,” Forschung im Ingenieurwesen, vol. 87, pp. 1221–1230, Dec. 2023, doi: 10.1007/s10010-023-00688-1. Access Online: https://link.springer.com/article/10.1007/s10010-023-00688-1
